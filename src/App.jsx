@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import FileUpload from './components/FileUpload'
+import TextInput from './components/TextInput'
 import MessageInput from './components/MessageInput'
 import ResultsTable from './components/ResultsTable'
 import LoadingSpinner from './components/LoadingSpinner'
 
 export default function App() {
+  const [tab, setTab] = useState('excel')
   const [numbers, setNumbers] = useState([])
   const [fileName, setFileName] = useState('')
   const [message, setMessage] = useState('')
@@ -13,6 +15,14 @@ export default function App() {
   const [error, setError] = useState('')
 
   const canSend = numbers.length > 0 && message.trim().length > 0 && !loading
+
+  function handleTabChange(newTab) {
+    setTab(newTab)
+    setNumbers([])
+    setFileName('')
+    setResults(null)
+    setError('')
+  }
 
   function handleReset() {
     setResults(null)
@@ -53,11 +63,40 @@ export default function App() {
           <p className="text-sm text-gray-500 mt-1">Via Evolution API — WhatsApp</p>
         </div>
 
-        <FileUpload
-          onNumbersLoaded={setNumbers}
-          fileName={fileName}
-          setFileName={setFileName}
-        />
+        <div className="flex gap-2 mb-6 border-b border-gray-200">
+          <button
+            onClick={() => handleTabChange('excel')}
+            className={`px-4 py-3 font-semibold text-sm border-b-2 transition-colors ${
+              tab === 'excel'
+                ? 'text-blue-600 border-blue-600'
+                : 'text-gray-600 border-transparent hover:text-gray-800'
+            }`}
+          >
+            📁 Upload Excel
+          </button>
+          <button
+            onClick={() => handleTabChange('text')}
+            className={`px-4 py-3 font-semibold text-sm border-b-2 transition-colors ${
+              tab === 'text'
+                ? 'text-blue-600 border-blue-600'
+                : 'text-gray-600 border-transparent hover:text-gray-800'
+            }`}
+          >
+            ✏️ Digitar Números
+          </button>
+        </div>
+
+        {tab === 'excel' && (
+          <FileUpload
+            onNumbersLoaded={setNumbers}
+            fileName={fileName}
+            setFileName={setFileName}
+          />
+        )}
+
+        {tab === 'text' && (
+          <TextInput onNumbersLoaded={setNumbers} />
+        )}
 
         {numbers.length > 0 && (
           <p className="text-sm text-blue-600 -mt-4 mb-4 font-medium">
