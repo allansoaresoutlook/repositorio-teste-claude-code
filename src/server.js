@@ -14,29 +14,50 @@ app.use(cors())
 app.use(express.json())
 
 function sanitizeNumber(num) {
-  return String(num).replace(/[\s\-\(\)\+\.]/g, '')
+  let clean = String(num).replace(/[\s\-\(\)\+\.]/g, '')
+  // Se o número tiver 10 ou 11 dígitos (DDD + número), adiciona o prefixo 55 (Brasil)
+  if (clean.length === 10 || clean.length === 11) {
+    clean = '55' + clean
+  }
+  return clean
 }
 
 function isValidNumber(num) {
-  return /^\d{10,15}$/.test(num)
+  // Aceita números de 12 a 15 dígitos (incluindo o prefixo do país)
+  return /^\d{12,15}$/.test(num)
 }
 
 async function sendWhatsAppMessage(number, text) {
   const baseUrl = EVOLUTION_API_URL.replace(/\/$/, '')
-  const url = `${baseUrl}/message/sendText/${INSTANCE_NAME}`
+  const encodedInstance = encodeURIComponent(INSTANCE_NAME)
+  const url = `${baseUrl}/message/sendText/${encodedInstance}`
 
-  const response = await axios.post(
-    url,
-    { number: `${number}@s.whatsapp.net`, text },
-    {
-      headers: {
-        apikey: EVOLUTION_API_KEY,
-        'Content-Type': 'application/json',
+  console.log(`[LOG] Enviando mensagem para ${number}...`)
+  
+  try {
+    const response = await axios.post(
+      url,
+      { 
+        number: number.includes('@') ? number : `${number}@s.whatsapp.net`, 
+        text 
       },
-      timeout: 15000,
-    }
-  )
-  return response.data
+      {
+        headers: {
+          apikey: EVOLUTION_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        timeout: 15000,
+      }
+    )
+    return response.data
+  } catch (err) {
+    console.error(`[ERROR] Falha ao enviar para ${number}:`, {
+      status: err.response?.status,
+      data: err.response?.data,
+      message: err.message
+    })
+    throw err
+  }
 }
 
 app.post('/api/send-messages', async (req, res) => {
