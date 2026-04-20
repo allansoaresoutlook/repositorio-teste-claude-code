@@ -27,21 +27,41 @@ function isValidNumber(num) {
   return /^\d{12,15}$/.test(num)
 }
 
-async function sendWhatsAppMessage(number, text) {
+async function checkWhatsAppNumber(number) {
+  const baseUrl = EVOLUTION_API_URL.replace(/\/$/, '')
+  const encodedInstance = encodeURIComponent(INSTANCE_NAME)
+  const url = `${baseUrl}/chat/whatsappNumbers/${encodedInstance}`
+
+  try {
+    const response = await axios.post(
+      url,
+      { numbers: [number] },
+      {
+        headers: {
+          apikey: EVOLUTION_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      }
+    )
+    const result = response.data[0]
+    return result && result.exists ? result.jid : null
+  } catch (err) {
+    console.error(`[ERROR] Falha ao verificar número ${number}:`, err.response?.data || err.message)
+    // Se a checagem falhar por instabilidade, tentaremos mandar o próprio número como fallback
+    return `${number}@s.whatsapp.net`
+  }
+}
+
+async function sendWhatsAppMessage(jid, text, originalNumber) {
   const baseUrl = EVOLUTION_API_URL.replace(/\/$/, '')
   const encodedInstance = encodeURIComponent(INSTANCE_NAME)
   const url = `${baseUrl}/message/sendText/${encodedInstance}`
 
-  const payload = { 
-    number: number.includes('@') ? number : `${number}@s.whatsapp.net`, 
-    text 
-  }
+  const payload = { number: jid, text }
 
   console.log(`\n[LOG] ========================================`)
-  console.log(`[LOG] Preparando envio para: ${number}`)
-  console.log(`[LOG] Evolution API URL: ${url}`)
-  console.log(`[LOG] Headers: apikey = ${EVOLUTION_API_KEY ? '****' + EVOLUTION_API_KEY.slice(-4) : 'MISSING'}`)
-  console.log(`[LOG] Body (Payload) enviado:`, JSON.stringify(payload))
+  console.log(`[LOG] Preparando envio para: ${originalNumber} (JID final: ${jid.replace('@s.whatsapp.net','')})`)
   
   try {
     const response = await axios.post(
@@ -55,23 +75,20 @@ async function sendWhatsAppMessage(number, text) {
         timeout: 15000,
       }
     )
-    console.log(`[LOG] Resposta da Evolution API [SUCESSO]:`, JSON.stringify(response.data))
+    console.log(`[LOG] SUCESSO! Mensagem processada na rede.`)
     console.log(`[LOG] ========================================\n`)
     return response.data
   } catch (err) {
     const status = err.response?.status
     const errorData = err.response?.data
     console.error(`\n[ERROR] ======================================`)
-    console.error(`[ERROR] Falha ao enviar para ${number}`)
+    console.error(`[ERROR] Falha ao enviar para ${originalNumber}`)
     console.error(`[ERROR] HTTP Status: ${status}`)
-    console.error(`[ERROR] Response Data:`, JSON.stringify(errorData))
     console.error(`[ERROR] Message:`, err.message)
     console.error(`[ERROR] ======================================\n`)
-    // throw error to be handled by original function
     throw err
   }
 }
-
 
 app.post('/api/send-messages', async (req, res) => {
   const { numbers, message } = req.body
@@ -89,19 +106,28 @@ app.post('/api/send-messages', async (req, res) => {
     const clean = sanitizeNumber(raw)
 
     if (!isValidNumber(clean)) {
-      details.push({ number: String(raw), status: 'error', message: 'Número inválido (deve ter 10-15 dígitos).' })
+      details.push({ number: String(raw), status: 'error', message: 'Número inválido (12-15 dígitos necessários).' })
       continue
     }
 
     try {
-      await sendWhatsAppMessage(clean, message.trim())
-      details.push({ number: clean, status: 'success' })
+      // Passo 1: Checa/Valida na Evolution API (Resolve o Mito do Nono Digito BR)
+      const jid = await checkWhatsAppNumber(clean)
+      
+      if (!jid) {
+         details.push({ number: String(raw), status: 'error', message: 'WhatsApp não registrado para este número' })
+         continue
+      }
+
+      // Passo 2: Envia usando a id formatada correta 
+      await sendWhatsAppMessage(jid, message.trim(), clean)
+      details.push({ number: String(raw), status: 'success' })
+      
     } catch (err) {
       let errMsg = 'Erro desconhecido'
       const resData = err.response?.data
       
       if (resData) {
-        // A Evolution API envia { exists: false } se o número não tiver WhatsApp
         if (resData.response && Array.isArray(resData.response.message) && resData.response.message[0]?.exists === false) {
            errMsg = "WhatsApp não registrado para este número"
         } else if (typeof resData.message === 'string') {
@@ -113,7 +139,7 @@ app.post('/api/send-messages', async (req, res) => {
         errMsg = err.message
       }
 
-      details.push({ number: clean, status: 'error', message: errMsg })
+      details.push({ number: String(raw), status: 'error', message: errMsg })
     }
   }
 
@@ -131,3 +157,4 @@ app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`)
   console.log(`Instance: ${INSTANCE_NAME}`)
 })
+
