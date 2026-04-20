@@ -32,15 +32,21 @@ async function sendWhatsAppMessage(number, text) {
   const encodedInstance = encodeURIComponent(INSTANCE_NAME)
   const url = `${baseUrl}/message/sendText/${encodedInstance}`
 
-  console.log(`[LOG] Enviando mensagem para ${number}...`)
+  const payload = { 
+    number: number.includes('@') ? number : `${number}@s.whatsapp.net`, 
+    text 
+  }
+
+  console.log(`\n[LOG] ========================================`)
+  console.log(`[LOG] Preparando envio para: ${number}`)
+  console.log(`[LOG] Evolution API URL: ${url}`)
+  console.log(`[LOG] Headers: apikey = ${EVOLUTION_API_KEY ? '****' + EVOLUTION_API_KEY.slice(-4) : 'MISSING'}`)
+  console.log(`[LOG] Body (Payload) enviado:`, JSON.stringify(payload))
   
   try {
     const response = await axios.post(
       url,
-      { 
-        number: number.includes('@') ? number : `${number}@s.whatsapp.net`, 
-        text 
-      },
+      payload,
       {
         headers: {
           apikey: EVOLUTION_API_KEY,
@@ -49,16 +55,23 @@ async function sendWhatsAppMessage(number, text) {
         timeout: 15000,
       }
     )
+    console.log(`[LOG] Resposta da Evolution API [SUCESSO]:`, JSON.stringify(response.data))
+    console.log(`[LOG] ========================================\n`)
     return response.data
   } catch (err) {
-    console.error(`[ERROR] Falha ao enviar para ${number}:`, {
-      status: err.response?.status,
-      data: err.response?.data,
-      message: err.message
-    })
+    const status = err.response?.status
+    const errorData = err.response?.data
+    console.error(`\n[ERROR] ======================================`)
+    console.error(`[ERROR] Falha ao enviar para ${number}`)
+    console.error(`[ERROR] HTTP Status: ${status}`)
+    console.error(`[ERROR] Response Data:`, JSON.stringify(errorData))
+    console.error(`[ERROR] Message:`, err.message)
+    console.error(`[ERROR] ======================================\n`)
+    // throw error to be handled by original function
     throw err
   }
 }
+
 
 app.post('/api/send-messages', async (req, res) => {
   const { numbers, message } = req.body
@@ -84,12 +97,23 @@ app.post('/api/send-messages', async (req, res) => {
       await sendWhatsAppMessage(clean, message.trim())
       details.push({ number: clean, status: 'success' })
     } catch (err) {
-      const errMsg =
-        err.response?.data?.message ||
-        err.response?.data?.error ||
-        err.message ||
-        'Erro desconhecido'
-      details.push({ number: clean, status: 'error', message: String(errMsg) })
+      let errMsg = 'Erro desconhecido'
+      const resData = err.response?.data
+      
+      if (resData) {
+        // A Evolution API envia { exists: false } se o número não tiver WhatsApp
+        if (resData.response && Array.isArray(resData.response.message) && resData.response.message[0]?.exists === false) {
+           errMsg = "WhatsApp não registrado para este número"
+        } else if (typeof resData.message === 'string') {
+           errMsg = resData.message
+        } else if (resData.error) {
+           errMsg = resData.error
+        }
+      } else {
+        errMsg = err.message
+      }
+
+      details.push({ number: clean, status: 'error', message: errMsg })
     }
   }
 
