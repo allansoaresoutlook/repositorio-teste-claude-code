@@ -9,6 +9,10 @@ const PORT = process.env.BACKEND_PORT || 3001
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY
 const INSTANCE_NAME = process.env.INSTANCE_NAME
+const DELAY_MIN = parseInt(process.env.DELAY_MIN) || 5000
+const DELAY_MAX = parseInt(process.env.DELAY_MAX) || 15000
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
 app.use(cors())
 app.use(express.json())
@@ -90,6 +94,45 @@ async function sendWhatsAppMessage(jid, text, originalNumber) {
   }
 }
 
+async function processQueue(numbers, message) {
+  console.log(`[LOG] Iniciando processamento de fila para ${numbers.length} números em segundo plano...`)
+  
+  for (let i = 0; i < numbers.length; i++) {
+    const raw = numbers[i]
+    const clean = sanitizeNumber(raw)
+    
+    console.log(`[LOG] [${i + 1}/${numbers.length}] Processando: ${raw}`)
+
+    if (!isValidNumber(clean)) {
+      console.error(`[LOG] [${i + 1}/${numbers.length}] Ignorado: Número inválido.`)
+      continue
+    }
+
+    try {
+      const jid = await checkWhatsAppNumber(clean)
+      
+      if (!jid) {
+         console.error(`[LOG] [${i + 1}/${numbers.length}] Erro: WhatsApp não registrado.`)
+         continue
+      }
+
+      await sendWhatsAppMessage(jid, message.trim(), clean)
+      
+      // Se não for o último número, aguarda o delay
+      if (i < numbers.length - 1) {
+        const waitTime = Math.floor(Math.random() * (DELAY_MAX - DELAY_MIN + 1)) + DELAY_MIN
+        console.log(`[LOG] Aguardando ${waitTime/1000} segundos antes do próximo envio...`)
+        await sleep(waitTime)
+      }
+      
+    } catch (err) {
+      console.error(`[LOG] [${i + 1}/${numbers.length}] Erro no processamento:`, err.message)
+    }
+  }
+  
+  console.log(`[LOG] Processamento de fila finalizado!`)
+}
+
 app.post('/api/send-messages', async (req, res) => {
   const { numbers, message } = req.body
 
@@ -100,53 +143,17 @@ app.post('/api/send-messages', async (req, res) => {
     return res.status(400).json({ error: 'Mensagem é obrigatória.' })
   }
 
-  const details = []
+  // Inicia o processamento no "background" (não usa await aqui)
+  processQueue(numbers, message).catch(err => {
+    console.error('[CRITICAL] Erro na fila de segundo plano:', err)
+  })
 
-  for (const raw of numbers) {
-    const clean = sanitizeNumber(raw)
-
-    if (!isValidNumber(clean)) {
-      details.push({ number: String(raw), status: 'error', message: 'Número inválido (12-15 dígitos necessários).' })
-      continue
-    }
-
-    try {
-      // Passo 1: Checa/Valida na Evolution API (Resolve o Mito do Nono Digito BR)
-      const jid = await checkWhatsAppNumber(clean)
-      
-      if (!jid) {
-         details.push({ number: String(raw), status: 'error', message: 'WhatsApp não registrado para este número' })
-         continue
-      }
-
-      // Passo 2: Envia usando a id formatada correta 
-      await sendWhatsAppMessage(jid, message.trim(), clean)
-      details.push({ number: String(raw), status: 'success' })
-      
-    } catch (err) {
-      let errMsg = 'Erro desconhecido'
-      const resData = err.response?.data
-      
-      if (resData) {
-        if (resData.response && Array.isArray(resData.response.message) && resData.response.message[0]?.exists === false) {
-           errMsg = "WhatsApp não registrado para este número"
-        } else if (typeof resData.message === 'string') {
-           errMsg = resData.message
-        } else if (resData.error) {
-           errMsg = resData.error
-        }
-      } else {
-        errMsg = err.message
-      }
-
-      details.push({ number: String(raw), status: 'error', message: errMsg })
-    }
-  }
-
-  const success = details.filter((d) => d.status === 'success').length
-  const failed = details.filter((d) => d.status === 'error').length
-
-  res.json({ success, failed, details })
+  // Responde imediatamente ao cliente
+  res.json({ 
+    status: 'accepted', 
+    message: `Envio de ${numbers.length} mensagens iniciado em segundo plano.`,
+    estimatedTimeMinutes: Math.round((numbers.length * ((DELAY_MIN + DELAY_MAX) / 2)) / 60000)
+  })
 })
 
 app.get('/api/health', (_req, res) => {
